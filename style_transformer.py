@@ -10,43 +10,55 @@ import PIL
 import matplotlib.pyplot as plt
 import copy
 
-from Dataloader import imshow, image_loader
+from Dataloader import imshow, image_loader, Normalization
+
+
+
+#export DISPLAY=localhost:12.0
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-img_path = '/home/sungsu21/Project/Style_Transformer/Images/cat.jpg'
+img_path = '/home/sungsu21/Project/Style_Transformer/Images/Deca.jpg'
 
 target_image = image_loader(img_path, (512, 512))
 target_image.to(device, torch.float)
+image = target_image.cpu().clone()
+# torch.Tensor에서 사용되는 배치 목적의 차원(dimension) 제거
+image = image.squeeze(0)
+# PIL 객체로 변경 
+image = transforms.ToPILImage()(image)
+# 이미지를 화면에 출력(matplotlib는 [0, 1] 사이의 값이라고 해도 정상적으로 처리)
 imshow(target_image)
-
 noise = torch.empty_like(target_image).uniform_(0, 1).to(device)
 imshow(noise)
+save_image(noise.cpu().detach()[0], 'initialize.png')
 
 loss = nn.MSELoss() # 손실(loss) 함수 설정
 iters = 100 # 반복(iteration) 횟수 설정
 lr = 1e4
 
-print("[ Start ]")
-imshow(noise)
+# print("[ Start ]")
 
-for i in range(iters):
-    # required_grad 속성의 값을 True로 설정하여 해당 torch.Tensor의 연산을 추적
-    noise.requires_grad = True
+# for i in range(iters):
+#     # required_grad 속성의 값을 True로 설정하여 해당 torch.Tensor의 연산을 추적
+#     noise = noise.to(device)
+#     target_image = target_image.to(device)
+#     noise.requires_grad = True
+#     # 손실 함수에 대하여 미분하여 기울기(gradient) 계산
+#     output = loss(noise, target_image)
+#     output.backward()
 
-    # 손실 함수에 대하여 미분하여 기울기(gradient) 계산
-    output = loss(noise, target_image)
-    output.backward()
+#     # 계산된 기울기(gradient)를 이용하여 손실 함수가 감소하는 방향으로 업데이트
+#     gradient = lr * noise.grad
+#     # 결과적으로 노이즈(perturbation)의 각 픽셀의 값이 [-eps, eps] 사이의 값이 되도록 자르기
+#     noise = torch.clamp(noise - gradient, min=0, max=1).detach_() # 연산을 추적하는 것을 중단하기 위해 detach() 호출
 
-    # 계산된 기울기(gradient)를 이용하여 손실 함수가 감소하는 방향으로 업데이트
-    gradient = lr * noise.grad
-    # 결과적으로 노이즈(perturbation)의 각 픽셀의 값이 [-eps, eps] 사이의 값이 되도록 자르기
-    noise = torch.clamp(noise - gradient, min=0, max=1).detach_() # 연산을 추적하는 것을 중단하기 위해 detach() 호출
+#     if (i + 1) % 10 == 0:
+#         print(f'[ Step: {i + 1} ]')
+#         print(f'Loss: {output}')
+#         imshow(noise)
+#         save_image(noise.cpu().detach()[0], f'output_{i}.png')
 
-    if (i + 1) % 10 == 0:
-        print(f'[ Step: {i + 1} ]')
-        print(f'Loss: {output}')
-        imshow(noise)
 
 # 콘텐츠(Content) 이미지와 스타일(Style) 이미지를 모두 준비합니다.
 content_img = image_loader('/home/sungsu21/Project/Style_Transformer/Images/content_img_1.jpg', (512, 640))
@@ -64,15 +76,6 @@ print(cnn)
 cnn_normalization_mean = torch.tensor([0.485, 0.456, 0.406]).to(device)
 cnn_normalization_std = torch.tensor([0.229, 0.224, 0.225]).to(device)
 
-class Normalization(nn.Module):
-    def __init__(self, mean, std):
-        super(Normalization, self).__init__()
-        self.mean = mean.clone().view(-1, 1, 1)
-        self.std = std.clone().view(-1, 1, 1)
-
-    def forward(self, img):
-        return (img - self.mean) / self.std
-
 def gram_matrix(input):
     # a는 배치 크기, b는 특징 맵의 개수, (c, d)는 특징 맵의 차원을 의미
     a, b, c, d = input.size()
@@ -82,7 +85,6 @@ def gram_matrix(input):
     G = torch.mm(features, features.t())
     # Normalize 목적으로 값 나누기
     return G.div(a * b * c * d)
-
 
 # 스타일 손실(style loss) 계산을 위한 클래스 정의
 class StyleLoss(nn.Module):
@@ -94,6 +96,7 @@ class StyleLoss(nn.Module):
         G = gram_matrix(input)
         self.loss = F.mse_loss(G, self.target)
         return input
+
 style_layers = ['conv_1', 'conv_2', 'conv_3', 'conv_4', 'conv_5']
 
 
@@ -140,6 +143,9 @@ def get_style_losses(cnn, style_img, noise_image):
     return model, style_losses
 
 def style_reconstruction(cnn, style_img, input_img, iters):
+    style_img = style_img.to(device)
+    input_img = input_img.to(device)
+
     model, style_losses = get_style_losses(cnn, style_img, input_img)
     optimizer = optim.LBFGS([input_img.requires_grad_()])
 
@@ -164,9 +170,10 @@ def style_reconstruction(cnn, style_img, input_img, iters):
             style_score.backward()
 
             run[0] += 1
-            if run[0] % 50 == 0:
+            if run[0] % 25 == 0:
                 print(f"[ Step: {run[0]} / Style loss: {style_score.item()}]")
                 imshow(input_img)
+                save_image(input_img, f'style_reconstruction_{run[0]}.png')
             
             return style_score
         
@@ -177,11 +184,11 @@ def style_reconstruction(cnn, style_img, input_img, iters):
 
     return input_img
 
-input_img = torch.empty_like(content_img).uniform_(0, 1).to(device)
-imshow(input_img)
+# input_img = torch.empty_like(content_img).uniform_(0, 1).to(device)
+# imshow(input_img)
 
-# style reconstruction 수행
-output = style_reconstruction(cnn, style_img=style_img, input_img=input_img, iters=300)
+# # style reconstruction 수행
+# output = style_reconstruction(cnn, style_img=style_img, input_img=input_img, iters=300)
 
 # 콘텐츠 손실(content loss) 계산을 위한 클래스 정의
 class ContentLoss(nn.Module):
@@ -238,6 +245,8 @@ def get_content_losses(cnn, content_img, noise_image):
     return model, content_losses
 
 def content_reconstruction(cnn, content_img, input_img, iters):
+    content_img = content_img.to(device)
+    input_img = input_img.to(device)
     model, content_losses = get_content_losses(cnn, content_img, input_img)
     optimizer = optim.LBFGS([input_img.requires_grad_()])
 
@@ -261,9 +270,11 @@ def content_reconstruction(cnn, content_img, input_img, iters):
             content_score.backward()
 
             run[0] += 1
-            if run[0] % 50 == 0:
+            if run[0] % 5 == 0:
                 print(f"[ Step: {run[0]} / Content loss: {content_score.item()}]")
                 imshow(input_img)
+                save_image(input_img, f'content_reconstruction_{run[0]}.png')
+
             
             return content_score
         
@@ -274,15 +285,15 @@ def content_reconstruction(cnn, content_img, input_img, iters):
 
     return input_img
 
-# 콘텐츠 이미지와 동일한 크기의 노이즈 이미지 준비하기
-input_img = torch.empty_like(content_img).uniform_(0, 1).to(device)
-imshow(input_img)
+# #콘텐츠 이미지와 동일한 크기의 노이즈 이미지 준비하기
+# input_img = torch.empty_like(content_img).uniform_(0, 1).to(device)
+# imshow(input_img)
 
-# content reconstruction 수행
-output = content_reconstruction(cnn, content_img=content_img, input_img=input_img, iters=300)
+# #content reconstruction 수행
+# output = content_reconstruction(cnn, content_img=content_img, input_img=input_img, iters=300)
 
-content_layers = ['conv_4']
-style_layers = ['conv_1', 'conv_3', 'conv_5', 'conv_7', 'conv_9']
+# content_layers = ['conv_4']
+# style_layers = ['conv_1', 'conv_3', 'conv_5', 'conv_7', 'conv_9']
 
 # Style Transfer 손실(loss)을 계산하는 함수
 def get_losses(cnn, content_img, style_img, noise_image):
@@ -335,6 +346,10 @@ def get_losses(cnn, content_img, style_img, noise_image):
     return model, content_losses, style_losses
 
 def style_transfer(cnn, content_img, style_img, input_img, iters):
+    content_img = content_img.to(device)
+    style_img = style_img.to(device)
+    input_img = input_img.to(device)
+    
     model, content_losses, style_losses = get_losses(cnn, content_img, style_img, input_img)
     optimizer = optim.LBFGS([input_img.requires_grad_()])
 
@@ -363,9 +378,11 @@ def style_transfer(cnn, content_img, style_img, input_img, iters):
             loss.backward()
 
             run[0] += 1
-            if run[0] % 100 == 0:
+            if run[0] % 25 == 0:
                 print(f"[ Step: {run[0]} / Content loss: {content_score.item()} / Style loss: {style_score.item()}]")
                 imshow(input_img)
+                save_image(input_img, f'Reconstruction_{run[0]}.png')
+
             
             return content_score + style_score
         
@@ -377,9 +394,9 @@ def style_transfer(cnn, content_img, style_img, input_img, iters):
     return input_img
 
 
-# 콘텐츠(Content) 이미지와 스타일(Style) 이미지를 모두 준비합니다.
-content_img = image_loader('/home/sungsu21/Project/Style_Transformer/Images/content_img_1.jpg', (512, 640))
-style_img = image_loader('/home/sungsu21/Project/Style_Transformer/Images/style_img_1.jpg', (512, 640))
+#Content image and style image
+style_img = image_loader('/home/sungsu21/Project/Style_Transformer/Images/style_img_1.jpg', (640, 512))
+content_img = image_loader('/home/sungsu21/Project/Style_Transformer/Images/content_img_1.jpg', (640, 512))
 
 print("[ Content Image ]")
 imshow(content_img)
@@ -389,32 +406,31 @@ imshow(style_img)
 # 콘텐츠 이미지와 동일한 크기의 노이즈 이미지 준비하기
 input_img = torch.empty_like(content_img).uniform_(0, 1).to(device)
 imshow(input_img)
-
-
-# style transfer 수행
-output = style_transfer(cnn, content_img=content_img, style_img=style_img, input_img=input_img, iters=900)
-
-
-save_image(output.cpu().detach()[0], 'output_1.png')
-print('이미지 파일 저장을 완료했습니다.')
-
-
-# 콘텐츠(Content) 이미지와 스타일(Style) 이미지를 모두 준비합니다.
-content_img = image_loader('/home/sungsu21/Project/Style_Transformer/Images/content_img_2.jpg', (512, 512))
-style_img = image_loader('/home/sungsu21/Project/Style_Transformer/Images/style_img_2.jpg', (512, 512))
-
-print("[ Content Image ]")
-imshow(content_img)
-print("[ Style Image ]")
-imshow(style_img)
-
-# 콘텐츠 이미지와 동일한 크기의 노이즈 이미지 준비하기
-input_img = torch.empty_like(content_img).uniform_(0, 1).to(device)
-imshow(input_img)
-
+save_image(input_img.cpu().detach()[0], 'random_noise.png')
 
 # style transfer 수행
-output = style_transfer(cnn, content_img=content_img, style_img=style_img, input_img=input_img, iters=800)
+output = style_transfer(cnn, content_img=content_img, style_img=style_img, input_img=input_img, iters=1500)
 
-save_image(output.cpu().detach()[0], 'output_2.png')
-print('이미지 파일 저장을 완료했습니다.')
+save_image(output.cpu().detach()[0], 'final_output.png')
+
+
+
+# # 콘텐츠(Content) 이미지와 스타일(Style) 이미지를 모두 준비합니다.
+# content_img = image_loader('/home/sungsu21/Project/Style_Transformer/Images/content_img_2.jpg', (512, 512))
+# style_img = image_loader('/home/sungsu21/Project/Style_Transformer/Images/style_img_2.jpg', (512, 512))
+
+# print("[ Content Image ]")
+# imshow(content_img)
+# print("[ Style Image ]")
+# imshow(style_img)
+
+# # 콘텐츠 이미지와 동일한 크기의 노이즈 이미지 준비하기
+# input_img = torch.empty_like(content_img).uniform_(0, 1).to(device)
+# imshow(input_img)
+
+
+# # style transfer 수행
+# output = style_transfer(cnn, content_img=content_img, style_img=style_img, input_img=input_img, iters=800)
+
+# save_image(output.cpu().detach()[0], 'output_2.png')
+# print('이미지 파일 저장을 완료했습니다.')
